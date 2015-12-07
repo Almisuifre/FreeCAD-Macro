@@ -1,0 +1,37 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: /home/alexandre/.FreeCAD/cornerCircle.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+import Sketcher
+
+mySketch = App.activeDocument().addObject('Sketcher::SketchObject','Sketch_X001')
+
+geoList = []
+geoList.append(Part.Line(App.Vector(-10.242700,9.606449,0),App.Vector(10.307512,9.606449,0)))
+geoList.append(Part.Line(App.Vector(10.307512,9.606449,0),App.Vector(10.307512,-10.280856,0)))
+geoList.append(Part.Line(App.Vector(10.307512,-10.280856,0),App.Vector(-10.242700,-10.280856,0)))
+geoList.append(Part.Line(App.Vector(-10.242700,-10.280856,0),App.Vector(-10.242700,9.606449,0)))
+
+mySketch.addGeometry(geoList,False)
+
+conList = []
+conList.append(Sketcher.Constraint('Coincident',0,2,1,1))
+conList.append(Sketcher.Constraint('Coincident',1,2,2,1))
+conList.append(Sketcher.Constraint('Coincident',2,2,3,1))
+conList.append(Sketcher.Constraint('Coincident',3,2,0,1))
+conList.append(Sketcher.Constraint('Horizontal',0))
+conList.append(Sketcher.Constraint('Horizontal',2))
+conList.append(Sketcher.Constraint('Vertical',1))
+conList.append(Sketcher.Constraint('Vertical',3))
+
+mySketch.addConstraint(conList)
+
+mySketch.fillet(0,1,App.Vector(8.368368,9.940643,0),App.Vector(10.187434,7.575860,0),1.939144)
+mySketch.fillet(1,2,App.Vector(10.187434,-9.068577,0),App.Vector(8.914090,-10.432875,0),1.212279)
+mySketch.fillet(2,3,App.Vector(-8.730838,-10.432875,0),App.Vector(-10.277039,-9.068577,0),1.248748)
+mySketch.fillet(3,0,App.Vector(-10.186089,7.757768,0),App.Vector(-8.094161,9.576830,0),1.848681)
+mySketch.addConstraint(Sketcher.Constraint('Equal',4,7)) 
+mySketch.addConstraint(Sketcher.Constraint('Equal',7,6)) 
+mySketch.addConstraint(Sketcher.Constraint('Equal',6,5)) 
+
+# Macro End: /home/alexandre/.FreeCAD/cornerCircle.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++

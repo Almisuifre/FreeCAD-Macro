@@ -1,0 +1,12 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: /home/alexandre/.FreeCAD/TransparenceOn.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+
+sel = FreeCADGui.Selection.getSelection()
+doc = App.activeDocument()
+
+operation = sel [0].Name
+
+FreeCADGui.getDocument(doc).getObject(operation).Transparency = 50
+# Macro End: /home/alexandre/.FreeCAD/TransparenceOn.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
