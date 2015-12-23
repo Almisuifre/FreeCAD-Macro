@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+# Merci à Yorick pour sa correction
+
 # Macro Begin: /home/alexandre/.FreeCAD/TransparenceOff.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
 import FreeCAD
 
@@ -8,5 +10,7 @@ doc = App.activeDocument()
 
 operation = sel[0].Name
 
-FreeCADGui.getDocument(doc).getObject(operation).Transparency = 0
+if hasattr( FreeCADGui.getDocument(doc).getObject(operation), "Transparency" ) :
+	FreeCADGui.getDocument(doc).getObject(operation).Transparency = 0
+
 # Macro End: /home/alexandre/.FreeCAD/TransparenceOff.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
