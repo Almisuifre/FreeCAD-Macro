@@ -1,16 +1,145 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 __title__   = "Exportation "
 __author__  = "Almisuifre"
-__version__ = "00.01"
-__date__    = "09/05/2018"
+__version__ = "00.02"
+__date__    = "12/05/2018"
 
+"""
+ REVISIONS
+===========
+12/05/2018 : Version 00.02
+- Add message close popup. Indicate the exportation to the directory.
+- Popup move from "information" popup to "warning" popup. This good information and bip to users. 
+- Debug the export.
 
-import FreeCAD, FreeCADGui, Part, PartGui, math, ImportGui, importOBJ, Mesh
-from FreeCAD import Base
-from PySide import QtGui, QtCore
-#from math import cos, radians
-App = FreeCAD
-Gui = FreeCADGui
- 
+ Thanks to the participants
+============================
+Yorik : Export mesh
+TheMarkster	: UTF8 Decoding and Export Debugging OBJ in https://forum.freecadweb.org/viewtopic.php?f=22&t=28678
+"""
+
+import FreeCAD
+from PySide import QtCore, QtGui
+import FreeCAD, Draft, Arch, os 
+import importOBJ
+from importOBJ import getIndices, translate
+import Mesh, ImportGui
+
+#
+# NECESSARY CORECTIVE BUG IN OBJ EXPORT
+# 
+
+if open.__module__ in ['__builtin__','io']:
+    pythonopen = open
+
+def export2(exportList,filename):
+    "called when freecad exports a file"
+    outfile = pythonopen(filename,"wb")
+    ver = FreeCAD.Version()
+    outfile.write("# FreeCAD v" + ver[0] + "." + ver[1] + " build" + ver[2] + " Arch module\n")
+    outfile.write("# http://www.freecadweb.org\n")
+    offset = 1
+    objectslist = Draft.getGroupContents(exportList,walls=True,addgroups=True)
+    objectslist = Arch.pruneIncluded(objectslist)
+    filenamemtl = filename[:-4] + ".mtl"
+    materials = []
+    
+    ##################################################
+    #only change I made was to the following line (aside from renaming function to export2)
+    #changing filenamemtl to filenamemtl.encode('utf-8')   <TheMarkster>
+    ##################################################
+    
+    #outfile.write("mtllib " + os.path.basename(filenamemtl) + "\n")
+    outfile.write("mtllib " + os.path.basename(filenamemtl.encode('utf-8')) + "\n")
+    for obj in objectslist:
+        if obj.isDerivedFrom("Part::Feature"):
+            hires = None
+            if FreeCAD.GuiUp:
+                visible = obj.ViewObject.isVisible()
+                if obj.ViewObject.DisplayMode == "HiRes":
+                    # check if high-resolution object is available
+                    if hasattr(obj,"HiRes"):
+                        if obj.HiRes:
+                            if obj.HiRes.isDerivedFrom("Mesh::Feature"):
+                                m = obj.HiRes.Mesh
+                            else:
+                                m = obj.HiRes.Shape
+                            hires = m.copy()
+                            hires.Placement = obj.Placement.multiply(m.Placement)
+                    if not hires:
+                        if hasattr(obj,"CloneOf"):
+                            if obj.CloneOf:
+                                if hasattr(obj.CloneOf,"HiRes"):
+                                    if obj.CloneOf.HiRes:
+                                        if obj.CloneOf.HiRes.isDerivedFrom("Mesh::Feature"):
+                                            m = obj.CloneOf.HiRes.Mesh
+                                        else:
+                                            m = obj.CloneOf.HiRes.Shape
+                                        hires = m.copy()
+                                        hires.Placement = obj.Placement.multiply(obj.CloneOf.Placement).multiply(m.Placement)
+            else:
+                visible = True
+            if visible:
+                if hires:
+                    vlist,elist,flist = getIndices(hires,offset)
+                else:
+                    vlist,elist,flist = getIndices(obj.Shape,offset)
+                if vlist == None:
+                    FreeCAD.Console.PrintError("Unable to export object "+obj.Label+". Skipping.\n")
+                else:
+                    offset += len(vlist)
+                    outfile.write("o " + obj.Name + "\n")
+
+                    # write material
+                    m = False
+                    if hasattr(obj,"Material"):
+                        if obj.Material:
+                            if hasattr(obj.Material,"Material"):
+                                outfile.write("usemtl " + obj.Material.Name + "\n")
+                                materials.append(obj.Material)
+                                m = True
+                    if not m:
+                        if FreeCAD.GuiUp:
+                            if hasattr(obj.ViewObject,"ShapeColor") and hasattr(obj.ViewObject,"Transparency"):
+                                mn = Draft.getrgb(obj.ViewObject.ShapeColor)[1:]
+                                outfile.write("usemtl color_" + mn + "\n")
+                                materials.append(("color_" + mn,obj.ViewObject.ShapeColor,obj.ViewObject.Transparency))
+
+                    # write geometry
+                    for v in vlist:
+                        outfile.write("v" + v + "\n")
+                    for e in elist:
+                        outfile.write("l" + e + "\n")
+                    for f in flist:
+                        outfile.write("f" + f + "\n")
+    outfile.close()
+    FreeCAD.Console.PrintMessage(translate("Arch","Successfully written ").decode('utf8') + filename + "\n")
+    if materials:
+        outfile = pythonopen(filenamemtl,"wb")
+        outfile.write("# FreeCAD v" + ver[0] + "." + ver[1] + " build" + ver[2] + " Arch module\n")
+        outfile.write("# http://www.freecadweb.org\n")
+        kinds = {"AmbientColor":"Ka ","DiffuseColor":"Kd ","SpecularColor":"Ks ","EmissiveColor":"Ke ","Transparency":"d "}
+        done = [] # store names to avoid duplicates
+        for mat in materials:
+            if isinstance(mat,tuple):
+                if not mat[0] in done:
+                    outfile.write("newmtl " + mat[0] + "\n")
+                    outfile.write("Kd " + str(mat[1][0]) + " " + str(mat[1][1]) + " " + str(mat[1][2]) + "\n")
+                    outfile.write("d " + str(mat[2]) + "\n")
+                    done.append(mat[0])
+            else:
+                if not mat.Name in done:
+                    outfile.write("newmtl " + mat.Name + "\n")
+                    for prop in kinds:
+                        if prop in mat.Material:
+                            outfile.write(kinds[prop] + mat.Material[prop].strip("()").replace(',',' ') + "\n")
+                    done.append(mat.Name)
+        outfile.write("# Material Count: " + str(len(materials)))
+        outfile.close()
+        FreeCAD.Console.PrintMessage(translate("Arch","Successfully written") + ' ' + filenamemtl + "\n")
+
 # <><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
 #
 # Class
@@ -42,21 +171,25 @@ class p():
 
 		if not sel :	
 			#Not selected, popup Error
-			reply = QtGui.QMessageBox.information(None, "", "Error ! You have note selected object to export !", QtGui.QMessageBox.Yes)
+			reply = QtGui.QMessageBox.warning(None, "", "Error ! You have not selected object to export !", QtGui.QMessageBox.Yes)
 			if reply == QtGui.QMessageBox.Yes:
 				self.dialog.hide()
 		else :
 			# -> Select object ok, search directory place to export file
 
-			#File Block
-			fileName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
+			# --- File Block ---
+			dirName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
+			
+			# --- FCSTD Block ---
+			dirCompletedFCSTD = dirName + "\\" + self.d1.text() + ".FCStd"
+			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD.encode("utf8"))
 
-			#FCSTD Block
-			dirCompletedFCSTD = fileName + "\\" + self.d1.text() + ".FCStd"
-			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD)
-
-			self.dialog.hide()
-
+			# --- Message Block ---
+			message = "You have export\n\n- " + self.d1.text() + ".FCStd\n\nto " + dirName
+			reply = QtGui.QMessageBox.information(None, "", message, QtGui.QMessageBox.Yes)
+			if reply == QtGui.QMessageBox.Yes:
+				# Close popup
+				self.dialog.hide()
 #
 # Export to file fcstd and stl to print
 #
@@ -66,39 +199,40 @@ class p():
 
 		if not sel :	
 			#Not selected, popup Error
-			reply = QtGui.QMessageBox.information(None, "", "Error ! You have note selected object to export !", QtGui.QMessageBox.Yes)
+			reply = QtGui.QMessageBox.warning(None, "", "Error ! You have not selected object to export !", QtGui.QMessageBox.Yes)
 			if reply == QtGui.QMessageBox.Yes:
 				self.dialog.hide()
 		else :
 			# -> Select object ok, search directory place to export file
 
-			#File Block
-			fileName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
+			# --- File Block ---
+			dirName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
 
-			#Bloc active document
+			# --- Bloc ActiveDocument --
 			doc = FreeCAD.ActiveDocument
 			if doc == None:
 				doc = FreeCAD.newDocument()
 
-			#FCSTD Block
-			dirCompletedFCSTD = fileName + "\\" + self.d1.text() + ".FCStd"
-			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD)
+			# --- FCSTD Block ---
+			dirCompletedFCSTD = dirName + "\\" + self.d1.text() + ".FCStd"
+			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD.encode("utf8"))
 
-			#STL Block
-			dirCompletedSTL = fileName + "\\" + self.d1.text() + ".stl"
+			# --- STL Block ---
+			dirCompletedSTL = dirName + "\\" + self.d1.text() + ".stl"
 
 			__objs__=[]
 			__objs__.append(doc.getObject(sel[0].Name))
-			Mesh.export(__objs__, dirCompletedSTL)
+			Mesh.export(__objs__, dirCompletedSTL.encode("utf8"))
 			
-			#Delet and hide popup
+			# Delete
 			del __objs__
-			self.dialog.hide()
 
-			#Debug
-			#FreeCAD.Console.PrintMessage( self.doc )
-			#FreeCAD.Console.PrintMessage( " - " )
-			#FreeCAD.Console.PrintMessage( "Ok\n" )
+			# --- Message Block ---
+			message = "You have export\n\n- " + self.d1.text() + ".FCStd\n- " + self.d1.text() + ".stl\n\nto " + dirName
+			reply = QtGui.QMessageBox.information(None, "", message, QtGui.QMessageBox.Yes)
+			if reply == QtGui.QMessageBox.Yes:
+				# Close popup
+				self.dialog.hide()
 
 #
 # Export to file fcstd, stl and step to print and assembly
@@ -110,40 +244,46 @@ class p():
 
 		if not sel :	
 			#Not selected, popup Error
-			reply = QtGui.QMessageBox.information(None, "", "Error ! You have note selected object to export !", QtGui.QMessageBox.Yes)
+			reply = QtGui.QMessageBox.warning(None, "", "Error ! You have not selected object to export !", QtGui.QMessageBox.Yes)
 			if reply == QtGui.QMessageBox.Yes:
 				self.dialog.hide()
 		else :
 			# -> Select object ok, search directory place to export file
 
-			#File Block
-			fileName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
+			# --- File Block ---
+			dirName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
 
-			#Bloc active document
+			# --- Bloc ActiveDocument --
 			doc = FreeCAD.ActiveDocument
 			if doc == None:
 				doc = FreeCAD.newDocument()
 
-			#FCSTD Block
-			dirCompletedFCSTD = fileName + "\\" + self.d1.text() + ".FCStd"
-			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD)
+			# --- FCSTD Block ---
+			dirCompletedFCSTD = dirName + "\\" + self.d1.text() + ".FCStd"
+			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD.encode("utf8"))
 
-			#STL Block
-			dirCompletedSTL = fileName + "\\" + self.d1.text() + ".stl"
+			# --- STL Block ---
+			dirCompletedSTL = dirName + "\\" + self.d1.text() + ".stl"
 
 			__objs__=[]
 			__objs__.append(doc.getObject(sel[0].Name))
-			Mesh.export(__objs__, dirCompletedSTL)
+			Mesh.export(__objs__, dirCompletedSTL.encode("utf8"))
 
-			#STEP Block
-			dirCompletedSTEP = fileName + "\\" + self.d1.text() + ".step"
+			# --- STEP Block ---
+			dirCompletedSTEP = dirName + "\\" + self.d1.text() + ".step"
 			__objs__=[]
 			__objs__.append(doc.getObject(sel[0].Name))
-			ImportGui.export(__objs__, dirCompletedSTEP)
+			ImportGui.export(__objs__, dirCompletedSTEP.encode("utf8"))
 			
-			#Delet and hide popup
+			# Delete
 			del __objs__
-			self.dialog.hide()
+
+			# --- Message Block ---
+			message = "You have export\n\n- " + self.d1.text() + ".FCStd\n- " + self.d1.text() + ".stl\n- " + self.d1.text() + ".step\n\nto " + dirName
+			reply = QtGui.QMessageBox.information(None, "", message, QtGui.QMessageBox.Yes)
+			if reply == QtGui.QMessageBox.Yes:
+				# Close popup
+				self.dialog.hide()
 
 #
 # Export to file fcstd and wrl to kicad component
@@ -154,33 +294,39 @@ class p():
 
 		if not sel :	
 			#Not selected, popup Error
-			reply = QtGui.QMessageBox.information(None, "", "Error ! You have note selected object to export !", QtGui.QMessageBox.Yes)
+			reply = QtGui.QMessageBox.warning(None, "", "Error ! You have not selected object to export !", QtGui.QMessageBox.Yes)
 			if reply == QtGui.QMessageBox.Yes:
 				self.dialog.hide()
 		else :
 			# -> Select object ok, search directory place to export file
 
-			#File Block
-			fileName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
+			# --- File Block ---
+			dirName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
 
-			#Bloc active document
+			# --- Bloc ActiveDocument --
 			doc = FreeCAD.ActiveDocument
 			if doc == None:
 				doc = FreeCAD.newDocument()
 
-			#FCSTD Block
-			dirCompletedFCSTD = fileName + "\\" + self.d1.text() + ".FCStd"
-			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD)
+			# --- FCSTD Block ---
+			dirCompletedFCSTD = dirName + "\\" + self.d1.text() + ".FCStd"
+			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD.encode("utf8"))
 
-			#WRL Block
-			dirCompletedWRL = fileName + "\\" + self.d1.text() + ".wrl"
+			# --- WRL Block ---
+			dirCompletedWRL = dirName + "\\" + self.d1.text() + ".wrl"
 			__objs__=[]
 			__objs__.append(doc.getObject(sel[0].Name))
-			FreeCADGui.export(__objs__, dirCompletedWRL)
+			FreeCADGui.export(__objs__, dirCompletedWRL.encode("utf8"))
 			
-			#Delet and hide popup
+			# Delete
 			del __objs__
-			self.dialog.hide()
+
+			# --- Message Block ---
+			message = "You have export\n\n- " + self.d1.text() + ".FCStd\n- " + self.d1.text() + ".wrl\n\nto " + dirName
+			reply = QtGui.QMessageBox.information(None, "", message, QtGui.QMessageBox.Yes)
+			if reply == QtGui.QMessageBox.Yes:
+				# Close popup
+				self.dialog.hide()
 
 #
 # Export to file fcstd and obj to blender renderer
@@ -192,33 +338,57 @@ class p():
 
 		if not sel :	
 			#Not selected, popup Error
-			reply = QtGui.QMessageBox.information(None, "", "Error ! You have note selected object to export !", QtGui.QMessageBox.Yes)
+			reply = QtGui.QMessageBox.warning(None, "", "Error ! You have not selected object to export !", QtGui.QMessageBox.Yes)
 			if reply == QtGui.QMessageBox.Yes:
 				self.dialog.hide()
 		else :
 			# -> Select object ok, search directory place to export file
 
-			#File Block
-			fileName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
+			# --- File Block ---
+			dirName = QtGui.QFileDialog().getExistingDirectory(None, 'Output directory', QtCore.QDir.homePath(), QtGui.QFileDialog.ShowDirsOnly)
 
-			#Bloc active document
+			# --- Bloc ActiveDocument --
 			doc = FreeCAD.ActiveDocument
 			if doc == None:
 				doc = FreeCAD.newDocument()
 
-			#FCSTD Block
-			dirCompletedFCSTD = fileName + "\\" + self.d1.text() + ".FCStd"
-			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD)
+			# --- FCSTD Block ---
+			dirCompletedFCSTD = dirName + "\\" + self.d1.text() + ".FCStd"
+			FreeCAD.ActiveDocument.saveAs(dirCompletedFCSTD.encode("utf8"))
 
-			#OBJ Block
-			dirCompletedOBJ = fileName + "\\" + self.d1.text() + ".obj"
+			# --- OBJ Block ---
+			dirCompletedOBJ = dirName + "\\" + self.d1.text() + ".obj"
 			__objs__=[]
 			__objs__.append(doc.getObject(sel[0].Name))
-			importOBJ.export(__objs__, dirCompletedOBJ)
 			
-			#Delet and hide popup
+			export2(__objs__,dirCompletedOBJ)
+
+			#Debug
+			#FreeCAD.Console.PrintMessage( "Access to def" )
+			#FreeCAD.Console.PrintMessage( "\r--\r" )
+			#FreeCAD.Console.PrintMessage( self.test() )
+			#FreeCAD.Console.PrintMessage( "\r--\r" )
+			#FreeCAD.Console.PrintMessage( "Ok\n" )
+			
+			# Delete
 			del __objs__
-			self.dialog.hide()
+
+			# --- Message Block ---
+			message = "You have export\n\n- " + self.d1.text() + ".FCStd\n- " + self.d1.text() + ".obj\n\nto " + dirName
+			reply = QtGui.QMessageBox.information(None, "", message, QtGui.QMessageBox.Yes)
+			if reply == QtGui.QMessageBox.Yes:
+				# Close popup
+				self.dialog.hide()
+#
+# DEBUG_BUTTON_TEST
+#
+	
+	#def DEBUG_BUTTON_TEST(self):
+		#FreeCAD.Console.PrintMessage( "<<<<<< DEBUG >>>>>>\n" )
+		#FreeCAD.Console.PrintMessage( "RETURN OF TEST : " )
+		#FreeCAD.Console.PrintMessage( "NONE" )
+		#FreeCAD.Console.PrintMessage( "\n" )
+		#FreeCAD.Console.PrintMessage( "<<<<<< END OF DEBUG >>>>>>\n" )
 
 # <><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
 #
@@ -268,6 +438,11 @@ class p():
 		la.addWidget(iN6)
 		self.d6 = QtGui.QPushButton('.fcstd et .obj', iN6)
 		la.addWidget(self.d6)
+
+		#iN7 = QtGui.QLabel("DEBUG -> Button Test")
+		#la.addWidget(iN7)
+		#self.d7 = QtGui.QPushButton('DEBUG -> Button test', iN7)
+		#la.addWidget(self.d7)
 	
 		okbox = QtGui.QDialogButtonBox(self.dialog)
 		okbox.setOrientation(QtCore.Qt.Horizontal)
@@ -280,7 +455,9 @@ class p():
 
 		self.d5.clicked.connect(self.modele_wrl_export)
 		self.d6.clicked.connect(self.modele_obj_export)
-		
+
+		#self.d7.clicked.connect(self.DEBUG_BUTTON_TEST)
+	
 		QtCore.QObject.connect(okbox, QtCore.SIGNAL("rejected()"), self.close)
 		QtCore.QMetaObject.connectSlotsByName(self.dialog)
 		self.dialog.show()
